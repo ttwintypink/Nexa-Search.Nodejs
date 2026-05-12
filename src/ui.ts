@@ -111,6 +111,9 @@ export const progressText = (
   const preset = modePresets[mode];
   const frames = ["◌", "◎", "◉", "◎"];
   const frame = frames[Math.floor(Date.now() / 750) % frames.length];
+  const checks = preset.useTme
+    ? "Проверяю Telegram, Fragment и t.me..."
+    : "Проверяю Telegram и Fragment...";
   return [
     `${frame} <b>${escapeHtml(config.appName)} ищет свободный ник</b>`,
     "",
@@ -119,7 +122,7 @@ export const progressText = (
     `<b>Режим:</b> ${escapeHtml(preset.title)}`,
     `<b>Проверено:</b> <code>${tries}</code>`,
     "",
-    "Проверяю Telegram, t.me и Fragment..."
+    checks
   ].join("\n");
 };
 
