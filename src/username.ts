@@ -158,6 +158,9 @@ export const isValidProfileUsername = (
   if (!USERNAME_RE.test(username)) {
     return false;
   }
+  if (withDigits && !/\d/.test(username)) {
+    return false;
+  }
   if (!withDigits && /\d/.test(username)) {
     return false;
   }
@@ -335,7 +338,8 @@ const checkFragment = async (
       `>${username}<`,
       `username/${username}`,
       `${username}</h1`,
-      `${username}</title`
+      `${username}</title`,
+      `>${username}.t.me<`
     ];
     const belongsToUsername =
       exactMarkers.some((marker) => low.includes(marker)) ||
@@ -356,20 +360,22 @@ const checkFragment = async (
       "auction",
       "sold",
       "taken",
+      "already taken",
+      "this link is already taken",
       "unavailable",
       "owned by",
       "collectible username",
       "ton web 3.0 address",
       "status"
     ];
+    const busy = busyMarkers.some((marker) => low.includes(marker));
 
-    if (belongsToUsername && busyMarkers.some((marker) => low.includes(marker))) {
-      return verdict(username, false, "fragment_card_exists", "fragment");
+    // Если Fragment открыл карточку username или показал признаки продажи/занятости — скипаем.
+    // Лучше лишний раз не выдать ник, чем показать занятый collectible username.
+    if (belongsToUsername || busy) {
+      return verdict(username, false, "fragment_busy_or_card_exists", "fragment");
     }
-    if (belongsToUsername && response.status === 200) {
-      return verdict(username, false, "fragment_page_exists", "fragment");
-    }
-    if (response.status >= 200 && response.status < 500 && !belongsToUsername) {
+    if (response.status >= 200 && response.status < 500) {
       return verdict(username, true, `fragment_no_exact_card_http_${response.status}`, "fragment");
     }
     return verdict(username, !strict, "fragment_unverified", "fragment");
@@ -425,7 +431,7 @@ const fitExactLength = (
   if (username.length > length) {
     username = username.slice(0, length);
   }
-  if (withDigits && length >= 5 && Math.random() < 0.45) {
+  if (withDigits && length >= 5 && !/\d/.test(username)) {
     username = `${username.slice(0, -1)}${randomItem("23456789".split(""))}`;
   }
   username = cleanUsername(username);
@@ -438,7 +444,7 @@ const pronounceableCandidate = (length: number, withDigits: boolean): string => 
     const alphabet = VOWELS.includes(value.at(-1) ?? "") ? CONSONANTS : VOWELS;
     value += randomItem(alphabet.split(""));
   }
-  if (withDigits && length >= 5) {
+  if (withDigits && length >= 5 && !/\d/.test(value)) {
     value = `${value.slice(0, -1)}${randomItem("23456789".split(""))}`;
   }
   return value.slice(0, length);
