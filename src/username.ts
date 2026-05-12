@@ -272,7 +272,7 @@ export const checkCandidate = async (
   // Сначала Fragment: так мы быстрее отсекаем collectible/продаваемые username
   // и меньше долбим Telegram Bot API.
   if (preset.useFragment) {
-    const fragmentCheck = await checkFragment(normalized, preset.strict, preset.networkTimeoutMs);
+    const fragmentCheck = await checkFragment(normalized, preset.networkTimeoutMs);
     if (!fragmentCheck.available) {
       return fragmentCheck;
     }
@@ -319,7 +319,6 @@ const checkTelegramBotApi = async (
 
 const checkFragment = async (
   username: string,
-  strict: boolean,
   timeoutMs: number
 ): Promise<CandidateCheck> => {
   try {
@@ -335,6 +334,7 @@ const checkFragment = async (
       `/username/${username}`,
       `@${username}`,
       `${username}.t.me`,
+      `t.me/${username}`,
       `>${username}<`,
       `username/${username}`,
       `${username}</h1`,
@@ -356,6 +356,7 @@ const checkFragment = async (
       "available for purchase",
       "minimum bid",
       "place bid",
+      "place bid and start auction",
       "highest bid",
       "auction",
       "sold",
@@ -365,22 +366,28 @@ const checkFragment = async (
       "unavailable",
       "owned by",
       "collectible username",
+      "telegram username",
+      "web address",
       "ton web 3.0 address",
+      "subscribe to updates",
       "status"
     ];
     const busy = busyMarkers.some((marker) => low.includes(marker));
 
-    // Если Fragment открыл карточку username или показал признаки продажи/занятости — скипаем.
-    // Лучше лишний раз не выдать ник, чем показать занятый collectible username.
+    // Любая карточка Fragment — это НЕ свободный обычный username.
+    // Даже статус "Available" на Fragment означает аукцион/collectible, поэтому такой ник скипаем.
     if (belongsToUsername || busy) {
       return verdict(username, false, "fragment_busy_or_card_exists", "fragment");
     }
     if (response.status >= 200 && response.status < 500) {
       return verdict(username, true, `fragment_no_exact_card_http_${response.status}`, "fragment");
     }
-    return verdict(username, !strict, "fragment_unverified", "fragment");
+
+    // Fail closed: если Fragment не дал понятный ответ, ник не выдаём.
+    return verdict(username, false, "fragment_unverified", "fragment");
   } catch {
-    return verdict(username, !strict, "fragment_network_error", "fragment");
+    // Fail closed: при таймауте/сетевой ошибке Fragment ник не выдаём, чтобы не пропускать collectible.
+    return verdict(username, false, "fragment_network_error", "fragment");
   }
 };
 
