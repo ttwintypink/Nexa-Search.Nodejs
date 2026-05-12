@@ -356,34 +356,28 @@ const checkFragment = async (
     const low = normalizeHtml(response.text);
     const finalUrlLower = response.finalUrl.toLowerCase();
 
+    // 404/410 = дефинитивно свободен на Fragment
     if (response.status === 404 || response.status === 410) {
       return verdict(username, true, "fragment_not_listed", "fragment");
     }
 
-    // Любая каноническая страница /username/{nick} на Fragment — маркетплейс (продажа/аукцион/коллект.).
-    if (isFragmentUsernameListingUrl(response.finalUrl, username)) {
-      return verdict(username, false, "fragment_username_market_page", "fragment");
+    // Проверяем, что это именно страница лота /username/{username}
+    if (!isFragmentUsernameListingUrl(response.finalUrl, username)) {
+      // Если редирект пошёл куда-то в другое место — тоже свободен
+      if (response.status >= 300 && response.status < 400) {
+        return verdict(username, true, "fragment_redirect_away", "fragment");
+      }
+      // Не 404 и не страница username — неоднозначно, не берём
+      return verdict(
+        username,
+        false,
+        "fragment_not_username_page",
+        "fragment"
+      );
     }
 
-    const exactMarkers = [
-      `/username/${username}`,
-      `@${username}`,
-      `${username}.t.me`,
-      `t.me/${username}`,
-      `>${username}<`,
-      `username/${username}`,
-      `${username}</h1`,
-      `${username}</title`,
-      `>${username}.t.me<`,
-      `"@${username}"`,
-      `href="/username/${username}`
-    ];
-    const belongsToUsername =
-      exactMarkers.some((marker) => low.includes(marker)) ||
-      finalUrlLower.includes(`/username/${username}`);
-
-    // Явные признаки лота на Fragment (продажа / ставки / TON).
-    const saleOrAuctionMarkers = [
+    // Явные признаки ЧТО-ТО там есть (лот, контакт, канал и т.п.)
+    const occupiedMarkers = [
       "for sale",
       "on sale",
       "listed for sale",
@@ -393,9 +387,6 @@ const checkFragment = async (
       "available for purchase",
       "minimum bid",
       "place bid",
-      "place bid and start auction",
-      "highest bid",
-      "current bid",
       "auction",
       "sold",
       "already taken",
@@ -405,41 +396,56 @@ const checkFragment = async (
       "collectible username",
       "ton web 3.0 address",
       "subscribe to updates",
+      "fragment collects",
+      "service fee",
+      "highest bid",
+      "current bid",
+      "place bid and start auction",
       "you will receive username",
       "receive username",
-      "fragment collects",
-      "service fee"
+      "contact @",
+      "channel @",
+      "bot @",
+      "private"
     ];
-    const saleOrAuction = saleOrAuctionMarkers.some((marker) => low.includes(marker));
 
-    // «Available» на карточке Fragment = обычно лот, а не свободный ник в настройках Telegram.
-    const looksLikeAvailabilityLot =
-      /\bavailable\b/.test(low) &&
-      (low.includes("fragment") ||
-        low.includes("collectible") ||
-        low.includes("auction") ||
-        low.includes("bid") ||
-        low.includes("ton") ||
-        low.includes("buy"));
-
-    // Любая карточка Fragment — это НЕ свободный обычный username для самостоятельной смены в профиле.
-    if (belongsToUsername || saleOrAuction || looksLikeAvailabilityLot) {
-      return verdict(username, false, "fragment_busy_or_card_exists", "fragment");
+    if (occupiedMarkers.some((marker) => low.includes(marker))) {
+      return verdict(username, false, "fragment_occupied_marker_found", "fragment");
     }
 
-    // Не 404/410 и без явных маркеров «не лот» — считаем ответ неоднозначным и не выдаём ник (fail‑closed).
-    return verdict(
-      username,
-      false,
-      finalUrlLower.includes("fragment.com") ? "fragment_ambiguous_http" : "fragment_http_not_404",
-      "fragment"
-    );
-  } catch {
+    // Маркеры, указывающие на НАСТОЯЩУЮ свободность (редко, но бывает)
+    const freeMarkers = [
+      "available",
+      "not available",
+      "username not found",
+      "no results",
+      "error"
+    ];
+
+    // Если есть явные маркеры "недоступно" + NOT занято чем-то — можно считать свободным
+    const hasUnderstandableState = occupiedMarkers.some((m) => low.includes(m)) ||
+                                   freeMarkers.some((m) => low.includes(m));
+
+    if (!hasUnderstandableState) {
+      // Неопределённое состояние — fail-closed, не даём ник
+      return verdict(
+        username,
+        false,
+        "fragment_ambiguous_state",
+        "fragment"
+      );
+    }
+
+    // Если дошли сюда — значит нет явных маркеров занятости
+    return verdict(username, true, "fragment_appears_free", "fragment");
+
+  } catch (error) {
+    // При ошибке сети — не берём, слишком рискованно
     return verdict(username, false, "fragment_network_error", "fragment");
   }
 };
 
-/** true, если URL — страница лота Fragment для этого @username. */
+/** true, если URL — именно страница /username/{username} на fragment.com. */
 const isFragmentUsernameListingUrl = (finalUrl: string, username: string): boolean => {
   try {
     const u = new URL(finalUrl);
@@ -447,11 +453,14 @@ const isFragmentUsernameListingUrl = (finalUrl: string, username: string): boole
       return false;
     }
     const parts = u.pathname.replace(/\/+$/, "").split("/").filter(Boolean);
-    const uIdx = parts.indexOf("username");
-    if (uIdx < 0 || !parts[uIdx + 1]) {
+    
+    // Проверяем точную структуру: /username/{ник}
+    if (parts.length !== 2 || parts[0] !== "username") {
       return false;
     }
-    return cleanUsername(parts[uIdx + 1] ?? "") === cleanUsername(username);
+    
+    // Убеждаемся, что это именно наш username
+    return cleanUsername(parts[1] ?? "") === cleanUsername(username);
   } catch {
     return false;
   }
@@ -461,6 +470,8 @@ const checkTme = async (username: string, timeoutMs: number): Promise<CandidateC
   try {
     const response = await fetchText(`https://t.me/${username}`, timeoutMs);
     const low = normalizeHtml(response.text);
+    
+    // Маркеры, что профиль СУЩЕСТВУЕТ
     const occupiedMarkers = [
       "tgme_page_title",
       "tgme_page_extra",
@@ -473,23 +484,41 @@ const checkTme = async (username: string, timeoutMs: number): Promise<CandidateC
       "tgme_widget_message_bubble",
       "view in telegram",
       "open in telegram",
-      "if you have telegram, you can contact"
+      "if you have telegram, you can contact",
+      "joined",
+      "subscribers",
+      "online"
     ];
+    
+    // Маркеры, что его НЕ существует
     const freeMarkers = [
       "username not found",
       "sorry, this username doesn't exist",
-      "sorry, this username doesn&#039;t exist"
+      "sorry, this username doesn&#039;t exist",
+      "this username doesn't exist"
     ];
 
+    // Если чётко сказано, что не существует
     if (response.status === 404 || freeMarkers.some((marker) => low.includes(marker))) {
       return verdict(username, true, "tme_not_found", "tme");
     }
+
+    // Если есть явные маркеры существования профиля
     if (response.status === 200 && occupiedMarkers.some((marker) => low.includes(marker))) {
       return verdict(username, false, "tme_profile_exists", "tme");
     }
+
+    // Статус 200, но без четких маркеров — может быть ботом или чем-то ещё
+    // Fail-closed: не берём
+    if (response.status === 200) {
+      return verdict(username, false, "tme_uncertain_200", "tme");
+    }
+
+    // Остальные коды ошибок — не берём
     if (response.status >= 200 && response.status < 500) {
       return verdict(username, false, `tme_unknown_http_${response.status}`, "tme");
     }
+    
     return verdict(username, false, `tme_http_${response.status}`, "tme");
   } catch {
     return verdict(username, false, "tme_network_error", "tme");
