@@ -46,10 +46,19 @@ export const config = {
 };
 
 export const requireBotToken = (): string => {
-  if (!config.botToken || config.botToken === "PASTE_YOUR_BOT_TOKEN_HERE") {
-    throw new Error("Set BOT_TOKEN as a hosting environment variable before starting the bot.");
+  const token = config.botToken;
+  
+  if (!token || token === "" || token === "PASTE_YOUR_BOT_TOKEN_HERE") {
+    console.error(
+      "\n❌ BOT_TOKEN не установлен!\n" +
+      "Установи переменную окружения BOT_TOKEN перед запуском бота.\n" +
+      "Пример: export BOT_TOKEN='123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11'\n"
+    );
+    process.exitCode = 1;
+    throw new Error("BOT_TOKEN not configured");
   }
-  return config.botToken;
+  
+  return token;
 };
 
 export const isAdmin = (userId: number | undefined): boolean => {
