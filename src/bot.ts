@@ -440,9 +440,10 @@ export const createBot = (token: string): BotRuntime => {
   });
 
   bot.on("pre_checkout_query", async (ctx) => {
-    await ctx.answerPreCheckoutQuery(false, {
-      error_message: "Premium временно недоступен (техработы)."
-    });
+    await ctx.answerPreCheckoutQuery(
+      false,
+      "Premium временно недоступен (техработы)."
+    );
   });
 
   bot.on(message("successful_payment"), async (ctx) => {
