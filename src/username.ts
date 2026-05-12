@@ -61,6 +61,7 @@ export const modePresets: Record<
     maxTries: number;
     beautyTries: number;
     timeLimitMs: number;
+    networkTimeoutMs: number;
     strict: boolean;
     useTme: boolean;
     useFragment: boolean;
@@ -68,44 +69,48 @@ export const modePresets: Record<
 > = {
   turbo: {
     title: "⚡ Турбо",
-    short: "самый быстрый вывод результата",
-    batch: 32,
-    maxTries: 5000,
-    beautyTries: 8,
-    timeLimitMs: 20_000,
+    short: "быстрый режим без тяжёлой t.me-проверки",
+    batch: 12,
+    maxTries: 1500,
+    beautyTries: 6,
+    timeLimitMs: 12_000,
+    networkTimeoutMs: 1_800,
     strict: false,
-    useTme: true,
+    useTme: false,
     useFragment: true
   },
   balance: {
     title: "✅ Баланс",
-    short: "быстро + нормальная сверка",
-    batch: 24,
-    maxTries: 7000,
-    beautyTries: 24,
-    timeLimitMs: 25_000,
+    short: "быстро + Fragment + Telegram Bot API",
+    batch: 10,
+    maxTries: 2500,
+    beautyTries: 16,
+    timeLimitMs: 18_000,
+    networkTimeoutMs: 2_500,
     strict: true,
-    useTme: true,
+    useTme: false,
     useFragment: true
   },
   strict: {
     title: "🛡 Строгий",
-    short: "максимально осторожная выдача",
-    batch: 14,
-    maxTries: 9000,
-    beautyTries: 48,
-    timeLimitMs: 35_000,
+    short: "осторожная проверка, но дольше",
+    batch: 8,
+    maxTries: 4000,
+    beautyTries: 32,
+    timeLimitMs: 25_000,
+    networkTimeoutMs: 3_500,
     strict: true,
     useTme: true,
     useFragment: true
   },
   beauty: {
     title: "💎 Красивый",
-    short: "сначала красивые словесные варианты",
-    batch: 20,
-    maxTries: 8000,
-    beautyTries: 120,
-    timeLimitMs: 30_000,
+    short: "красивые варианты + аккуратная проверка",
+    batch: 8,
+    maxTries: 3500,
+    beautyTries: 80,
+    timeLimitMs: 25_000,
+    networkTimeoutMs: 3_000,
     strict: true,
     useTme: true,
     useFragment: true
@@ -261,20 +266,23 @@ export const checkCandidate = async (
     return verdict(normalized, false, "local_invalid", "local");
   }
 
-  const telegramCheck = await checkTelegramBotApi(telegram, normalized);
-  if (!telegramCheck.available) {
-    return telegramCheck;
-  }
-
+  // Сначала Fragment: так мы быстрее отсекаем collectible/продаваемые username
+  // и меньше долбим Telegram Bot API.
   if (preset.useFragment) {
-    const fragmentCheck = await checkFragment(normalized, preset.strict);
+    const fragmentCheck = await checkFragment(normalized, preset.strict, preset.networkTimeoutMs);
     if (!fragmentCheck.available) {
       return fragmentCheck;
     }
   }
 
+  const telegramCheck = await checkTelegramBotApi(telegram, normalized);
+  if (!telegramCheck.available) {
+    return telegramCheck;
+  }
+
+  // t.me оставлен только для строгих режимов: он самый медленный и часто тормозит BotHost.
   if (preset.useTme) {
-    const tmeCheck = await checkTme(normalized, preset.strict);
+    const tmeCheck = await checkTme(normalized, preset.strict, preset.networkTimeoutMs);
     if (!tmeCheck.available) {
       return tmeCheck;
     }
@@ -306,9 +314,13 @@ const checkTelegramBotApi = async (
   }
 };
 
-const checkFragment = async (username: string, strict: boolean): Promise<CandidateCheck> => {
+const checkFragment = async (
+  username: string,
+  strict: boolean,
+  timeoutMs: number
+): Promise<CandidateCheck> => {
   try {
-    const response = await fetchText(`https://fragment.com/username/${username}`, 4500);
+    const response = await fetchText(`https://fragment.com/username/${username}`, timeoutMs);
     const low = normalizeHtml(response.text);
     const finalUrl = response.finalUrl.toLowerCase();
 
@@ -366,9 +378,13 @@ const checkFragment = async (username: string, strict: boolean): Promise<Candida
   }
 };
 
-const checkTme = async (username: string, strict: boolean): Promise<CandidateCheck> => {
+const checkTme = async (
+  username: string,
+  strict: boolean,
+  timeoutMs: number
+): Promise<CandidateCheck> => {
   try {
-    const response = await fetchText(`https://t.me/${username}`, 4500);
+    const response = await fetchText(`https://t.me/${username}`, timeoutMs);
     const low = normalizeHtml(response.text);
     const occupiedMarkers = [
       "tgme_page_title",
