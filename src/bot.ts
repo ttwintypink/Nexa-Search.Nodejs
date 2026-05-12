@@ -325,61 +325,98 @@ export const createBot = (token: string): BotRuntime => {
     if (!chatId) {
       return;
     }
-    await deleteLastScreen(ctx, fresh);
-    const status = await ctx.telegram.sendMessage(
-      chatId,
-      progressText(selection.length, selection.withDigits, selection.mode, 0),
-      htmlExtra()
-    );
-    store.saveLastMessage(ctx.from.id, status.message_id);
+    
+    try {
+      await deleteLastScreen(ctx, fresh);
+      const status = await ctx.telegram.sendMessage(
+        chatId,
+        progressText(selection.length, selection.withDigits, selection.mode, 0),
+        htmlExtra()
+      );
+      store.saveLastMessage(ctx.from.id, status.message_id);
 
-    let lastEditAt = 0;
-    const result = await findAvailableUsername(ctx.telegram, selection, async (progress) => {
-      if (Date.now() - lastEditAt < 900) {
+      let lastEditAt = 0;
+      let result;
+      
+      try {
+        result = await Promise.race([
+          findAvailableUsername(ctx.telegram, selection, async (progress) => {
+            if (Date.now() - lastEditAt < 900) {
+              return;
+            }
+            lastEditAt = Date.now();
+            await editScreen(
+              ctx,
+              status.message_id,
+              progressText(selection.length, selection.withDigits, selection.mode, progress.tries)
+            ).catch(() => undefined);
+          }),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("Search timeout")), 35000)
+          ) as Promise<any>
+        ]);
+      } catch (searchError) {
+        console.error("[search:timeout]", searchError);
+        await editScreen(
+          ctx,
+          status.message_id,
+          "<b>⏱️ Поиск занял слишком долго.</b>\n\nПопробуй ещё раз или смени режим.",
+          Markup.inlineKeyboard([
+            [Markup.button.callback("Искать ещё", "do_search")],
+            [Markup.button.callback("Настройки", "search_menu")],
+            [Markup.button.callback("◀️ Главное меню", "main")]
+          ])
+        ).catch(() => undefined);
         return;
       }
-      lastEditAt = Date.now();
-      await editScreen(
-        ctx,
-        status.message_id,
-        progressText(selection.length, selection.withDigits, selection.mode, progress.tries)
-      );
-    });
 
-    if (!result.username) {
-      await editScreen(
-        ctx,
-        status.message_id,
-        notFoundText(),
-        Markup.inlineKeyboard([
-          [Markup.button.callback("Искать ещё", "do_search")],
-          [Markup.button.callback("Настройки", "search_menu")],
-          [Markup.button.callback("◀️ Главное меню", "main")]
-        ])
-      );
-      return;
-    }
+      if (!result.username) {
+        await editScreen(
+          ctx,
+          status.message_id,
+          notFoundText(),
+          Markup.inlineKeyboard([
+            [Markup.button.callback("Искать ещё", "do_search")],
+            [Markup.button.callback("Настройки", "search_menu")],
+            [Markup.button.callback("◀️ Главное меню", "main")]
+          ])
+        ).catch(() => undefined);
+        return;
+      }
 
-    store.addFound({
-      userId: ctx.from.id,
-      username: result.username,
-      length: selection.length,
-      withDigits: selection.withDigits,
-      mode: selection.mode
-    });
-    await editScreen(
-      ctx,
-      status.message_id,
-      resultText({
+      store.addFound({
+        userId: ctx.from.id,
         username: result.username,
         length: selection.length,
         withDigits: selection.withDigits,
-        mode: selection.mode,
-        tries: result.tries,
-        elapsedMs: result.elapsedMs
-      }),
-      resultKeyboard(result.username)
-    );
+        mode: selection.mode
+      });
+      
+      await editScreen(
+        ctx,
+        status.message_id,
+        resultText({
+          username: result.username,
+          length: selection.length,
+          withDigits: selection.withDigits,
+          mode: selection.mode,
+          tries: result.tries,
+          elapsedMs: result.elapsedMs
+        }),
+        resultKeyboard(result.username)
+      ).catch(() => undefined);
+    } catch (error) {
+      console.error("[search:error]", error);
+      await showScreen(
+        store,
+        ctx,
+        "<b>❌ Ошибка при поиске.</b>\n\nПопробуй ещё раз.",
+        Markup.inlineKeyboard([
+          [Markup.button.callback("Искать ещё", "do_search")],
+          [Markup.button.callback("◀️ Главное меню", "main")]
+        ])
+      ).catch(() => undefined);
+    }
   });
 
   bot.action("my_names", async (ctx) => {
