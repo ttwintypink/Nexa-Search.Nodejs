@@ -49,6 +49,7 @@ type InlineKeyboard = ReturnType<typeof Markup.inlineKeyboard>;
 export const createBot = (token: string): BotRuntime => {
   const bot = new Telegraf(token);
   const store = new JsonStore();
+  const activeSearches = new Set<number>();
   let botUsername = "";
 
   const referralLink = (user: UserRecord): string => {
@@ -282,7 +283,14 @@ export const createBot = (token: string): BotRuntime => {
     if (!user) {
       return;
     }
-    const fresh = store.getUser(ctx.from.id) ?? user;
+
+    const userId = ctx.from.id;
+    if (activeSearches.has(userId)) {
+      await answer(ctx, "Поиск уже идёт. Дождись результата.", true);
+      return;
+    }
+
+    const fresh = store.getUser(userId) ?? user;
     const selection = fresh.search;
     if (selection.length === 5 && !store.isPremium(fresh)) {
       await showScreen(store, ctx, fiveLetterRequiresPremiumText(), premiumShopKeyboard());
@@ -314,61 +322,52 @@ export const createBot = (token: string): BotRuntime => {
       );
       return;
     }
-    if (store.isPremium(fresh)) {
-      store.updateUser(ctx.from.id, { lastSearchAt: now() });
-    } else if (!store.useAttempt(ctx.from.id)) {
-      await showScreen(store, ctx, attemptsExhaustedText(), premiumShopKeyboard());
-      return;
-    }
 
     const chatId = ctx.chat?.id;
     if (!chatId) {
       return;
     }
-    
+
+    activeSearches.add(userId);
     try {
+      if (store.isPremium(fresh)) {
+        store.updateUser(userId, { lastSearchAt: now() });
+      } else if (!store.useAttempt(userId)) {
+        await showScreen(store, ctx, attemptsExhaustedText(), premiumShopKeyboard());
+        return;
+      }
+
       await deleteLastScreen(ctx, fresh);
       const status = await ctx.telegram.sendMessage(
         chatId,
         progressText(selection.length, selection.withDigits, selection.mode, 0),
         htmlExtra()
       );
-      store.saveLastMessage(ctx.from.id, status.message_id);
+      store.saveLastMessage(userId, status.message_id);
 
       let lastEditAt = 0;
-      let result;
-      
-      try {
-        result = await Promise.race([
-          findAvailableUsername(ctx.telegram, selection, async (progress) => {
-            if (Date.now() - lastEditAt < 900) {
-              return;
-            }
-            lastEditAt = Date.now();
-            await editScreen(
-              ctx,
-              status.message_id,
-              progressText(selection.length, selection.withDigits, selection.mode, progress.tries)
-            ).catch(() => undefined);
-          }),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("Search timeout")), 35000)
-          ) as Promise<any>
-        ]);
-      } catch (searchError) {
-        console.error("[search:timeout]", searchError);
+      console.log(
+        `[search:start] user=${userId} length=${selection.length} digits=${selection.withDigits} mode=${selection.mode}`
+      );
+
+      const result = await findAvailableUsername(ctx.telegram, selection, async (progress) => {
+        if (Date.now() - lastEditAt < 900) {
+          return;
+        }
+        lastEditAt = Date.now();
+        console.log(
+          `[search:progress] user=${userId} tries=${progress.tries} reason=${progress.lastReason}`
+        );
         await editScreen(
           ctx,
           status.message_id,
-          "<b>⏱️ Поиск занял слишком долго.</b>\n\nПопробуй ещё раз или смени режим.",
-          Markup.inlineKeyboard([
-            [Markup.button.callback("Искать ещё", "do_search")],
-            [Markup.button.callback("Настройки", "search_menu")],
-            [Markup.button.callback("◀️ Главное меню", "main")]
-          ])
+          progressText(selection.length, selection.withDigits, selection.mode, progress.tries)
         ).catch(() => undefined);
-        return;
-      }
+      });
+
+      console.log(
+        `[search:done] user=${userId} username=${result.username ?? "none"} tries=${result.tries} elapsed=${result.elapsedMs} reason=${result.reason}`
+      );
 
       if (!result.username) {
         await editScreen(
@@ -385,13 +384,13 @@ export const createBot = (token: string): BotRuntime => {
       }
 
       store.addFound({
-        userId: ctx.from.id,
+        userId,
         username: result.username,
         length: selection.length,
         withDigits: selection.withDigits,
         mode: selection.mode
       });
-      
+
       await editScreen(
         ctx,
         status.message_id,
@@ -416,6 +415,8 @@ export const createBot = (token: string): BotRuntime => {
           [Markup.button.callback("◀️ Главное меню", "main")]
         ])
       ).catch(() => undefined);
+    } finally {
+      activeSearches.delete(userId);
     }
   });
 
